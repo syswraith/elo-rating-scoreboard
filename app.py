@@ -9,8 +9,8 @@ def init_db():
     c = conn.cursor()
     # Drop the previous players table if it exists
     c.execute('DROP TABLE IF EXISTS players')
-    
-    # Create Players Table
+
+    # Create Absents Table
     c.execute('''
         CREATE TABLE players (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -21,7 +21,7 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Add a Player
+# Add a Absent
 def add_player(name):
     conn = sqlite3.connect('elo.db')
     c = conn.cursor()
@@ -30,12 +30,19 @@ def add_player(name):
     conn.close()
 
 # Elo Calculation with rounding to 6 decimal places
-def calculate_elo(winner_rating, loser_rating, k=32):
-    expected_winner = 1 / (1 + 10 ** ((loser_rating - winner_rating) / 400))
-    expected_loser = 1 / (1 + 10 ** ((winner_rating - loser_rating) / 400))
+def calculate_elo(winner_rating, loser_rating, k=32, tie=False):
+    if tie:
+        expected_winner = 1 / (1 + 10 ** ((loser_rating - winner_rating) / 400))
+        expected_loser = 1 / (1 + 10 ** ((winner_rating - loser_rating) / 400))
 
-    new_winner_rating = winner_rating + k * (1 - expected_winner)
-    new_loser_rating = loser_rating + k * (0 - expected_loser)
+        new_winner_rating = winner_rating + k * (0.5 - expected_winner)
+        new_loser_rating = loser_rating + k * (0.5 - expected_loser)
+    else:
+        expected_winner = 1 / (1 + 10 ** ((loser_rating - winner_rating) / 400))
+        expected_loser = 1 / (1 + 10 ** ((winner_rating - loser_rating) / 400))
+
+        new_winner_rating = winner_rating + k * (1 - expected_winner)
+        new_loser_rating = loser_rating + k * (0 - expected_loser)
 
     # Round the ratings to 6 decimal places
     new_winner_rating = round(new_winner_rating, 6)
@@ -58,7 +65,7 @@ def get_all_players():
 def home():
     return "Elo Rating System"
 
-# Get Player Rating by ID
+# Get Absent Rating by ID
 @app.route('/player/<int:id>', methods=['GET'])
 def get_player_rating(id):
     conn = sqlite3.connect('elo.db')
@@ -66,20 +73,20 @@ def get_player_rating(id):
     c.execute('SELECT name, rating FROM players WHERE id=?', (id,))
     player = c.fetchone()
     conn.close()
-    
+
     if player:
         return jsonify({"name": player[0], "rating": player[1]})
     else:
-        return jsonify({"error": "Player not found"}), 404
+        return jsonify({"error": "Absent not found"}), 404
 
-# Add a New Player
+# Add a New Absent
 @app.route('/player', methods=['POST'])
 def add_new_player():
     data = request.get_json()
     name = data.get('name')
 
     add_player(name)
-    return jsonify({"message": f"Player {name} added."}), 201
+    return jsonify({"message": f"Absent {name} added."}), 201
 
 # Record Match and Update Elo Ratings
 @app.route('/match', methods=['POST'])
@@ -93,16 +100,17 @@ def record_match():
         conn = sqlite3.connect('elo.db')
         c = conn.cursor()
 
-        # Get current ratings
+        # Get current ratings for the tied player
         c.execute('SELECT rating FROM players WHERE id=?', (winner_id,))
-        current_rating = c.fetchone()[0]
+        result = c.fetchone()
+
+        if result is None:
+            return jsonify({"error": "Winner ID does not exist."}), 404
+
+        current_rating = result[0]
 
         # Update both players' ratings based on a tie
-        expected_score = 1 / (1 + 10 ** ((current_rating - current_rating) / 400))
-        new_rating = current_rating + 32 * (0.5 - expected_score)
-
-        # Round the new rating to 6 decimal places
-        new_rating = round(new_rating, 6)
+        new_rating, _ = calculate_elo(current_rating, current_rating, tie=True)
 
         # Update the player's rating (same player for a tie)
         c.execute('UPDATE players SET rating=? WHERE id=?', (new_rating, winner_id))
@@ -115,12 +123,23 @@ def record_match():
     conn = sqlite3.connect('elo.db')
     c = conn.cursor()
 
-    # Get current ratings
+    # Get current ratings for the winner
     c.execute('SELECT rating FROM players WHERE id=?', (winner_id,))
-    winner_rating = c.fetchone()[0]
+    winner_result = c.fetchone()
 
+    if winner_result is None:
+        return jsonify({"error": "Winner ID does not exist."}), 404
+
+    winner_rating = winner_result[0]
+
+    # Get current ratings for the loser
     c.execute('SELECT rating FROM players WHERE id=?', (loser_id,))
-    loser_rating = c.fetchone()[0]
+    loser_result = c.fetchone()
+
+    if loser_result is None:
+        return jsonify({"error": "Loser ID does not exist."}), 404
+
+    loser_rating = loser_result[0]
 
     # Calculate new Elo ratings
     new_winner_rating, new_loser_rating = calculate_elo(winner_rating, loser_rating)
@@ -137,7 +156,7 @@ def record_match():
         "loser_new_rating": new_loser_rating
     })
 
-# Scoreboard Route to Display All Player Ratings
+# Scoreboard Route to Display All Absent Ratings
 @app.route('/scoreboard')
 def scoreboard():
     players = get_all_players()  # Fetch all players from the database, sorted by rating
@@ -147,4 +166,3 @@ def scoreboard():
 if __name__ == '__main__':
     init_db()  # This will drop the previous table and create a new one
     app.run(host='0.0.0.0', port=5000, debug=True)
-
